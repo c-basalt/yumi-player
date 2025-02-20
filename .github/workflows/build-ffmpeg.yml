@@ -1,0 +1,87 @@
+name: Build Minimal FFmpeg
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Install build dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          git \
+          mingw-w64 \
+          yasm \
+          pkg-config \
+          gcc-12 \
+          g++-12 \
+          gcc-mingw-w64-x86-64 \
+          g++-mingw-w64-x86-64 \
+          nasm
+
+    - name: Set up GCC 12
+      run: |
+        sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 100
+        sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 100
+        sudo update-alternatives --set x86_64-w64-mingw32-gcc /usr/bin/x86_64-w64-mingw32-gcc-posix
+        sudo update-alternatives --set x86_64-w64-mingw32-g++ /usr/bin/x86_64-w64-mingw32-g++-posix
+
+    - name: Clone FFmpeg
+      run: |
+        git clone -b release/7.1 --single-branch https://git.ffmpeg.org/ffmpeg.git ffmpeg
+
+    - name: Configure and Build FFmpeg
+      run: |
+        cd ffmpeg
+        ./configure \
+          --arch=x86_64 \
+          --target-os=mingw32 \
+          --cross-prefix=x86_64-w64-mingw32- \
+          --disable-everything \
+          --enable-protocol=file \
+          --enable-protocol=pipe \
+          --enable-muxer=pipe \
+          --enable-demuxer=mp3 \
+          --enable-demuxer=mov \
+          --enable-decoder=mp3 \
+          --enable-decoder=aac \
+          --enable-filter=volumedetect \
+          --enable-filter=aresample \
+          --enable-muxer=null \
+          --enable-encoder=pcm_s16le \
+          --enable-swresample \
+          --disable-doc \
+          --disable-htmlpages \
+          --disable-manpages \
+          --disable-podpages \
+          --disable-txtpages \
+          --disable-network \
+          --enable-small \
+          --disable-debug \
+          --enable-static \
+          --disable-shared \
+          --disable-runtime-cpudetect \
+          --extra-ldflags="-static" \
+          --disable-x86asm \
+          --enable-ffmpeg
+
+        make -j$(nproc)
+        x86_64-w64-mingw32-strip ffmpeg.exe
+
+    - name: Copy FFmpeg license from source
+      run: |
+        cp ffmpeg/LICENSE.md ffmpeg/ffmpeg-LICENSE.txt
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: ffmpeg-minimal
+        path: |
+          ffmpeg/ffmpeg.exe
+          ffmpeg/ffmpeg-LICENSE.txt
+        retention-days: ${{ github.event_name == 'workflow_dispatch' && 90 || 1 }}

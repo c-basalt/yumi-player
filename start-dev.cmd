@@ -1,0 +1,1 @@
+python main.py --no-browser --verbose --allow-host http://localhost:5173 --host 0.0.0.0

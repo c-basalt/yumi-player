@@ -1,0 +1,54 @@
+name: Create Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  run-python-tests:
+    uses: ./.github/workflows/python-tests.yml
+
+  run-vitest:
+    uses: ./.github/workflows/vitest.yml
+
+  build:
+    uses: ./.github/workflows/build.yml
+    secrets: inherit
+
+  create-release:
+    needs: [build, run-python-tests, run-vitest]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+    - name: Download artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: yumi_player-windows-ffmpeg
+        path: dist
+
+    - name: Create ZIP archive
+      run: |
+        cd dist
+        zip -r ../yumi-player-windows-${{ github.ref_name }}.zip \
+          yumi_player.exe \
+          ffmpeg.exe \
+          ffmpeg-LICENSE.txt \
+          开启局域网访问.cmd
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ github.ref_name }}
+        name: ${{ github.ref_name }}
+        files: yumi-player-windows-${{ github.ref_name }}.zip
+        draft: false
+        prerelease: false
+
+    - name: Delete artifacts
+      uses: geekyeggo/delete-artifact@v5
+      with:
+        name: yumi_player-windows-ffmpeg

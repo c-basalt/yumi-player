@@ -1,0 +1,9 @@
+aiohttp == 3.10.*
+aiohttp-socks ~= 0.9.1
+brotli ~= 1.1.0
+rookiepy ~= 0.5.6
+pycryptodome == 3.*
+tortoise-orm == 0.21.*
+aerich == 0.7.*
+aiofiles == 24.1.*
+certifi >= 2024
