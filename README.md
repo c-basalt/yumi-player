@@ -95,7 +95,7 @@ pip install -r requirements.txt
 
 ```cmd
 .venv\Scripts\activate
-py main.py
+python main.py
 ```
 
 ## 开发者功能
