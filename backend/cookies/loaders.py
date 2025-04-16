@@ -134,7 +134,7 @@ class NeteaseMusicCookieLoader(CookieLoader):
         if not cookies.get('MUSIC_U') or not cookies.get('__csrf'):
             raise NoCookieError(f"{cookies.get('MUSIC_U')} {cookies.get('__csrf')}")
         async with aiohttp_session() as session:
-            async with session.get('https://music.163.com/', cookies=cookies,
+            async with session.get('https://music.163.com/user/home', cookies=cookies,
                                    headers={**_UA}) as r:
                 if r.status != 200:
                     raise ValidationFailError(f'status code: {r.status}')
