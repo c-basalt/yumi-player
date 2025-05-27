@@ -9,6 +9,8 @@ import typing
 import contextlib
 import re
 import http.cookies
+import urllib.parse
+import hashlib
 
 import aiohttp
 import brotli
@@ -24,6 +26,8 @@ class DanmakuClient:
     _UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36 Edg/118.0.2088.61'
     _ROOM_INFO_CACHE: dict[int, tuple[int, int, int]] = {}
     _OWNER_NAME_CACHE: dict[int, str] = {}
+    _WBI_SIGN_CACHE: tuple[int, str] | None = None
+    _WBI_CACHE_TIMEOUT = 120
 
     _logger = logging.getLogger('danmaku')
 
@@ -142,6 +146,33 @@ class DanmakuClient:
         return None
 
     @classmethod
+    async def _fetch_wbi_sign(cls, roomid: int, session: aiohttp.ClientSession):
+        headers = {'User-Agent': cls._UA, 'Referer': f'https://live.bilibili.com/{roomid}'}
+        async with session.get('https://api.bilibili.com/x/web-interface/nav', headers=headers) as r:
+            data = (await r.json())['data']['wbi_img']
+        lookup = ''.join(data[k].split('/')[-1].split('.')[0] for k in ('img_url', 'sub_url'))
+        mixin_key_enc_tab = [
+            46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49,
+            33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13, 37, 48, 7, 16, 24, 55, 40,
+            61, 26, 17, 0, 1, 60, 51, 30, 4, 22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11,
+            36, 20, 34, 44, 52,
+        ]
+        return ''.join(lookup[i] for i in mixin_key_enc_tab)[:32]
+
+    @classmethod
+    async def _wbi_sign(cls, roomid: int, session: aiohttp.ClientSession, params):
+        if cls._WBI_SIGN_CACHE is None or time.monotonic() > cls._WBI_SIGN_CACHE[0] + cls._WBI_CACHE_TIMEOUT:
+            cls._WBI_SIGN_CACHE = (int(time.monotonic()), await cls._fetch_wbi_sign(roomid, session))
+        params['wts'] = round(time.time())
+        params = {
+            k: ''.join(filter(lambda char: char not in "!'()*", str(v)))
+            for k, v in sorted(params.items())
+        }
+        query = urllib.parse.urlencode(params)
+        params['w_rid'] = hashlib.md5(f'{query}{cls._WBI_SIGN_CACHE[1]}'.encode()).hexdigest()
+        return params
+
+    @classmethod
     async def fetch_room_info(cls, roomid: int, session: aiohttp.ClientSession) -> tuple[int, int, int]:
         '''return (roomid, short_id, uid) for a given roomid or short_id'''
         if roomid in cls._ROOM_INFO_CACHE:
@@ -213,7 +244,8 @@ class DanmakuClient:
             self._logger.warning(f'[{self.roomid}] 无有效的DedeUserID，使用空cookies')
             cookies = {}
 
-        async with self._session.get(self._API_AUTH_URL, params={'id': self.roomid, 'type': 0},
+        params = await self._wbi_sign(self.roomid, self._session, {'id': self.roomid, 'type': 0})
+        async with self._session.get(self._API_AUTH_URL, params=params,
                                      cookies=cookies, headers=self.headers, **kwargs) as r:
             self._logger.info(
                 f'[{self.roomid}] {"不使用cookies并" if not cookies else ""}获取弹幕握手信息')

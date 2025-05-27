@@ -24,6 +24,8 @@ jobs:
       contents: write
 
     steps:
+    - uses: actions/checkout@v4
+
     - name: Download artifacts
       uses: actions/download-artifact@v4
       with:
@@ -40,13 +42,13 @@ jobs:
           开启局域网访问.cmd
 
     - name: Create GitHub Release
-      uses: softprops/action-gh-release@v1
-      with:
-        tag_name: ${{ github.ref_name }}
-        name: ${{ github.ref_name }}
-        files: yumi-player-windows-${{ github.ref_name }}.zip
-        draft: false
-        prerelease: false
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        gh release create ${{ github.ref_name }} \
+        --title ${{ github.ref_name }} \
+        --notes "$(python3 .github/scripts/changelog.py ${{ github.ref_name }})" \
+        "yumi-player-windows-${{ github.ref_name }}.zip"
 
     - name: Delete artifacts
       uses: geekyeggo/delete-artifact@v5

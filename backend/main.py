@@ -281,6 +281,8 @@ def determine_primary_ip(default='127.0.0.1') -> str:
 
 
 def main():
+    os.environ['PATH'] = f'{os.environ["PATH"]}{os.pathsep}{os.path.abspath(".")}'
+
     parser = argparse.ArgumentParser()
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=9823)

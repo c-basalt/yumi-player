@@ -508,7 +508,7 @@ class TestMatchPlaylistUrl(unittest.TestCase):
 class TestAPIMixin(typing.Generic[API_TYPE]):
     _API_CLASS: type[API_TYPE]
     _TEST_SONGINFO: dict
-    _TEST_SEARCH: dict
+    _TEST_SEARCH: list[dict]
     _TEST_PLAYLIST_URL: list[dict]
 
     async def asyncSetUp(self):
@@ -553,8 +553,9 @@ class TestAPIMixin(typing.Generic[API_TYPE]):
         if not getattr(self, '_TEST_SEARCH', None):
             raise unittest.SkipTest('No test data for search')
 
-        results = await self.api.search(self._TEST_SEARCH['query'])
-        self.assertEqual(set(r.id for r in results), set(self._TEST_SEARCH['song_ids']))
+        for search_info in self._TEST_SEARCH:
+            results = await self.api.search(search_info['query'])
+            self.assertEqual(set(r.id for r in results), set(search_info['song_ids']))
 
     async def _test_playlist_url(self, method_name: str):
         assert isinstance(self, unittest.TestCase)
@@ -592,10 +593,10 @@ class TestNeteaseMusicAPI(TestAPIMixin[NeteaseMusicAPI], unittest.IsolatedAsynci
             },
         },
     }
-    _TEST_SEARCH = {
+    _TEST_SEARCH = [{
         'query': '白金ディスコ 井口裕香',
         'song_ids': ['460528', '399367220'],
-    }
+    }]
     _TEST_PLAYLIST_URL = [{
         'handler_method': '_fetch_playlist',
         'input': ('9345473', {'type': 'playlist'}),
@@ -630,10 +631,10 @@ class TestQQMusicAPI(TestAPIMixin[QQMusicAPI], unittest.IsolatedAsyncioTestCase)
             },
         },
     }
-    _TEST_SEARCH = {
+    _TEST_SEARCH = [{
         'query': '星间飞行',
         'song_ids': ['002HLH8k10De6r', '002rbyGQ2enDEn', '001oBpTk2HjgoR', '003wQdka0xw2I7'],
-    }
+    }]
     _TEST_PLAYLIST_URL = [{
         'handler_method': '_fetch_playlist',
         'input': ('9209322004', {}),
@@ -674,10 +675,10 @@ class TestBilibiliAPI(TestAPIMixin[BilibiliAPI], unittest.IsolatedAsyncioTestCas
             'size': 1913319,
         },
     }
-    _TEST_SEARCH = {
+    _TEST_SEARCH = [{
         'query': '真夜白音 模型公开',
         'song_ids': ['BV1i94y1W77Y'],
-    }
+    }]
     _TEST_PLAYLIST_URL = [{
         'handler_method': '_fetch_playlist_from_bvid',
         'input': ('BV1Xx41117tr', {}),
