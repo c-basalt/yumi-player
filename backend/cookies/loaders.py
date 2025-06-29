@@ -59,8 +59,13 @@ class CookieLoader:
     @classmethod
     async def load(cls, browser: Browser):
         cookies = await cls._load(browser)
-        uid, username = await cls.validate(cookies)
-        return uid, username, cookies
+        if not cookies:
+            raise NoCookieError
+        try:
+            uid, username = await cls.validate(cookies)
+            return uid, username, cookies
+        except ValidationFailError:
+            return None, None, cookies
 
 
 @register_loader
@@ -71,7 +76,7 @@ class BilibiliCookieLoader(CookieLoader):
     @classmethod
     async def validate(cls, cookies: http.cookies.SimpleCookie) -> tuple[str, str]:
         if not cookies.get('SESSDATA'):
-            raise NoCookieError
+            raise ValidationFailError
         async with aiohttp_session() as session:
             async with session.get('https://api.bilibili.com/x/web-interface/nav',
                                    cookies=cookies,
@@ -99,7 +104,7 @@ class QQMusicCookieLoader(CookieLoader):
     @classmethod
     async def validate(cls, cookies: http.cookies.SimpleCookie) -> tuple[str, str]:
         if not cookies.get('uin') or not cookies.get('fqm_pvqid'):
-            raise NoCookieError
+            raise ValidationFailError
         url = 'https://c6.y.qq.com/rsc/fcgi-bin/fcg_get_profile_homepage.fcg'
         params = {
             '_': int(time.time() * 1e3),
@@ -132,7 +137,7 @@ class NeteaseMusicCookieLoader(CookieLoader):
     @classmethod
     async def validate(cls, cookies: http.cookies.SimpleCookie) -> tuple[str, str]:
         if not cookies.get('MUSIC_U') or not cookies.get('__csrf'):
-            raise NoCookieError(f"{cookies.get('MUSIC_U')} {cookies.get('__csrf')}")
+            raise ValidationFailError
         async with aiohttp_session() as session:
             async with session.get('https://music.163.com/user/home', cookies=cookies,
                                    headers={**_UA}) as r:

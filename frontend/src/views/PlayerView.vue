@@ -280,7 +280,8 @@ onUnmounted(() => {
                 :class="{ [msg.type]: true, first: index === 0 }">
                 {{ msg.text }}
             </div>
-            <div class="status-message idle" key="idle-disabled" v-if="status.config?.request_handler_off">弹幕点歌已禁用</div>
+            <div class="status-message error" key="idle-disconnected" v-if="!status.room_connected">弹幕连接断开</div>
+            <div class="status-message idle" key="idle-disabled" v-else-if="status.config?.request_handler_off">弹幕点歌已禁用</div>
             <div class="status-message idle" key="idle-paused" v-else-if="status.paused">播放已暂停</div>
             <div class="status-message idle" key="idle-default-alt"
                 v-else-if="idleBannerCounter % 30 === 29 && status.config">

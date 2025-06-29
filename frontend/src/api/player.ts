@@ -38,6 +38,7 @@ export type SongEntry = {
 };
 
 export type PlayerStatus = {
+    room_connected: boolean;
     paused: boolean;
     progress: number;
     volume: number | null;

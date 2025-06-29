@@ -61,6 +61,7 @@ defineProps<{ handleManualSearch: (bvid: string) => void }>();
 defineExpose({
     volume: computed(() => playerStatus.value?.volume),
     decibel: computed(() => playerStatus.value?.config.target_db),
+    room_connected: computed(() => playerStatus.value?.room_connected),
 })
 </script>
 

@@ -81,21 +81,22 @@ class CookieManager:
             self._auto_reload_task.cancel()
 
     async def _revalidate_cookies(self, loader_key: str, update_expired: bool = True):
-        self._last_load_time[loader_key] = time.time()
+        self._last_load_time[loader_key] = time.monotonic()
         try:
             _ = await self.site_loaders[loader_key].validate(self.get_cookies(loader_key))
             logger.debug(f'[{loader_key}] cookies检查有效')
         except ValidationFailError as e:
             logger.debug(f'[{loader_key}] cookies检查失效: {e}')
             if update_expired:
-                self._cookie_result[loader_key] = CookieResult(None, None, None, 'Cookie已过期')
+                self._cookie_result[loader_key].uid = None
+                self._cookie_result[loader_key].message = 'Cookie已过期'
         except Exception:
             # We shouldn't have NoCookieError for validated cookies
             # Not to write result for unknown error here
             logger.exception(f'[{loader_key}] 重新检查cookies时出错')
 
     def _since_last_load(self, loader_key: str) -> float:
-        return time.time() - self._last_load_time.get(loader_key, 0)
+        return time.monotonic() - self._last_load_time.get(loader_key, 0)
 
     async def _load_auto_entries(self, browser_name: str | None = None, due_now: bool = False):
         for loader_key, sub_config in self._sub_configs.items():
@@ -136,7 +137,7 @@ class CookieManager:
                          for loader_key, sub_config in self._sub_configs.items()},
             'site_loaders': {key: loader._NAME for key, loader in self.site_loaders.items()},
             'results': {key: value.message for key, value in self._cookie_result.items()},
-            'success': {key: value.cookies is not None for key, value in self._cookie_result.items()},
+            'success': {key: value.uid is not None for key, value in self._cookie_result.items()},
             'browsers': browser_names(),
             'appbound': appbound_browser_names(),
             'cookie_cloud_config': {
@@ -155,8 +156,7 @@ class CookieManager:
             if cookie_result := self._cookie_result.get(loader_key):
                 if cookie_result.cookies:
                     sub_config.browser = cookie_result.browser
-                    if expect_uid:
-                        sub_config.uid = cookie_result.uid
+                    sub_config.uid = cookie_result.uid
             if not expect_uid:
                 sub_config.uid = None
         else:
@@ -170,52 +170,53 @@ class CookieManager:
         sub_config.uid = None
 
     async def load(self, loader_key, browser_name, expect_uid=None) -> CookieResult:
-        self._last_load_time[loader_key] = time.time()
+        self._last_load_time[loader_key] = time.monotonic()
         result = await self._load(loader_key, browser_name, expect_uid)
-        logger.debug(f'[{loader_key}] 从 {browser_name} 加载了{len(result.cookies or {})}条有效cookies')
-        if result.cookies and self._sub_configs[loader_key].on:
+        self._cookie_result[loader_key] = result
+        logger.debug(f'[{loader_key}] 从 {browser_name} 加载了{len(result.cookies or {})}条cookies')
+        if self._sub_configs[loader_key].on:
             self.configure_autoload(loader_key, True, self._sub_configs[loader_key].expect_uid)
         return result
 
     async def _load(self, loader_key, browser_name, expect_uid=None) -> CookieResult:
-        def _update_success(uid: str, username: str, cookies: http.cookies.SimpleCookie):
-            self._cookie_result[loader_key] = CookieResult(
-                uid, browser_name, cookies, f'获取用户：{username} ({uid})')
-
-        def _update_failed(message: str):
-            self._cookie_result[loader_key] = CookieResult(None, None, None, message)
+        uid, cookies = None, None
+        exception = False
 
         if loader_key not in self.site_loaders:
-            return CookieResult(None, None, None, f'{loader_key} is not a valid loader key')
-        try:
-            browser = get_browser(browser_name, self._sub_configs[loader_key].try_appbound_debugger_workaround)
-            uid, username, cookies = await self.site_loaders[loader_key].load(browser)
-            if expect_uid and str(uid) != str(expect_uid):
-                logger.debug(f'[{loader_key}] uid不符, 处理为加载失败')
-                _update_failed(f'uid={uid}与预设({expect_uid})不符')
-            else:
-                logger.debug(f'[{loader_key}] 共加载{len(cookies or {})}条cookies')
-                _update_success(uid, username, cookies)
-        except NoCookieError:
-            logger.debug(f'[{loader_key}] {browser_name} 无可用cookie')
-            _update_failed('无可用cookie')
-        except ValidationFailError as e:
-            logger.debug(f'[{loader_key}] {browser_name} cookies检查无效: {e}')
-            _update_failed('Cookie已过期')
-        except BrowserNotAvailableError as e:
-            logger.debug(f'[{loader_key}] 浏览器不可用: {e}')
-            _update_failed(f'浏览器不可用: {e}')
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            if "can't find cookies file" in str(e):
-                _update_failed('找不到浏览器cookie文件')
-            elif 'Chrome cookies from version v130 ' in str(e):
-                _update_failed('无法读取130+版本Chromium内核的浏览器（可尝试开启实验方式）')
-            else:
-                logger.exception(f'[{loader_key}] 读取cookies时出错')
-                _update_failed(f'读取Cookie时出错: {e}')
-        return self._cookie_result[loader_key]
+            exception = True
+            logger.exception(f'{loader_key} is not a valid loader key')
+            msg = f'{loader_key} is not a valid loader key'
+        else:
+            try:
+                browser = get_browser(browser_name, self._sub_configs[loader_key].try_appbound_debugger_workaround)
+                uid, username, cookies = await self.site_loaders[loader_key].load(browser)
+                if uid is not None:
+                    if expect_uid and str(uid) != str(expect_uid):
+                        uid, cookies = None, None
+                        msg = f'uid={uid}与预设({expect_uid})不符'
+                    else:
+                        logger.debug(f'[{loader_key}] 共加载{len(cookies or {})}条cookies')
+                        msg = f'获取用户：{username} ({uid})'
+                else:
+                    msg = '已加载，但Cookie无效或已过期'
+            except NoCookieError:
+                msg = '无可用cookie'
+            except BrowserNotAvailableError as e:
+                msg = f'浏览器不可用: {e}'
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                if "can't find cookies file" in str(e):
+                    msg = '找不到浏览器cookie文件'
+                elif 'Chrome cookies from version v130 ' in str(e):
+                    msg = '无法读取130+版本Chromium内核的浏览器（可尝试开启实验方式）'
+                else:
+                    exception = True
+                    logger.exception(f'[{loader_key}] 读取cookies时出错')
+                    msg = f'读取Cookie时出错: {e}'
+        if not exception:
+            logger.debug(f'[{loader_key}] {browser_name} {msg}')
+        return CookieResult(uid, browser_name if cookies else None, cookies, msg)
 
     async def cookie_handler(self, request: aiohttp.web.Request):
         if request.method == 'POST':

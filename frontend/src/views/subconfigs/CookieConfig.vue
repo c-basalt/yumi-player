@@ -188,7 +188,6 @@ const handleConfig = (key: string) => {
 
                 <n-space style="margin-top: 15px;" align="center">
                     <n-switch :value="autoloadOptions[modalLoaderKey]?.on"
-                        :disabled="!cookieStatus.success[modalLoaderKey]"
                         :rail-style="autoloadOptions[modalLoaderKey]?.try_appbound_debugger_workaround ? ({ checked }) => ({ background: checked ? themeVars.warningColor : undefined, boxShadow: 'none' }) : undefined"
                         @update:value="value => handleAutoloadChange(modalLoaderKey, { on: value })">
                         <template #checked>启动时加载</template>

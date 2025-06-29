@@ -10,7 +10,10 @@ import contextlib
 import re
 import http.cookies
 import urllib.parse
+import uuid
 import hashlib
+import random
+import string
 
 import aiohttp
 import brotli
@@ -26,6 +29,7 @@ class DanmakuClient:
     _UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36 Edg/118.0.2088.61'
     _ROOM_INFO_CACHE: dict[int, tuple[int, int, int]] = {}
     _OWNER_NAME_CACHE: dict[int, str] = {}
+    _UID_LOOKUP_CACHE: dict[str, int] = {}
     _WBI_SIGN_CACHE: tuple[int, str] | None = None
     _WBI_CACHE_TIMEOUT = 120
 
@@ -108,6 +112,10 @@ class DanmakuClient:
             self._listen_queues.pop(queue_key, None)
 
     @property
+    def ws_connected(self):
+        return self._websocket is not None and not self._websocket.closed
+
+    @property
     def closed(self):
         return self._session.closed
 
@@ -146,30 +154,52 @@ class DanmakuClient:
         return None
 
     @classmethod
-    async def _fetch_wbi_sign(cls, roomid: int, session: aiohttp.ClientSession):
+    async def _fetch_uid(cls, roomid: int, session: aiohttp.ClientSession, cookies: http.cookies.SimpleCookie | dict):
         headers = {'User-Agent': cls._UA, 'Referer': f'https://live.bilibili.com/{roomid}'}
-        async with session.get('https://api.bilibili.com/x/web-interface/nav', headers=headers) as r:
-            data = (await r.json())['data']['wbi_img']
-        lookup = ''.join(data[k].split('/')[-1].split('.')[0] for k in ('img_url', 'sub_url'))
+        async with session.get('https://api.bilibili.com/x/web-interface/nav', headers=headers, cookies=cookies) as r:
+            data = (await r.json())['data']
+            cls._update_wbi_sign(data['wbi_img'])
+        return int(data.get('mid', 0))
+
+    @classmethod
+    async def lookup_uid_by_cookie(cls, roomid: int, session: aiohttp.ClientSession,
+                                   cookies: dict[str, str] | http.cookies.SimpleCookie):
+        if (sessdata := cookies.get('SESSDATA')) is None:
+            return 0
+        key = sessdata.value if isinstance(sessdata, http.cookies.Morsel) else sessdata
+        if key not in cls._UID_LOOKUP_CACHE:
+            cls._UID_LOOKUP_CACHE[key] = (await cls._fetch_uid(roomid, session, cookies))
+        return cls._UID_LOOKUP_CACHE[key]
+
+    @classmethod
+    def _update_wbi_sign(cls, wbi_img):
+        lookup = ''.join(wbi_img[k].split('/')[-1].split('.')[0] for k in ('img_url', 'sub_url'))
         mixin_key_enc_tab = [
             46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49,
             33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13, 37, 48, 7, 16, 24, 55, 40,
             61, 26, 17, 0, 1, 60, 51, 30, 4, 22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11,
             36, 20, 34, 44, 52,
         ]
-        return ''.join(lookup[i] for i in mixin_key_enc_tab)[:32]
+        cls._WBI_SIGN_CACHE = (int(time.monotonic()), ''.join(lookup[i] for i in mixin_key_enc_tab)[:32])
+
+    @classmethod
+    async def _fetch_wbi_sign(cls, roomid: int, session: aiohttp.ClientSession):
+        headers = {'User-Agent': cls._UA, 'Referer': f'https://live.bilibili.com/{roomid}'}
+        async with session.get('https://api.bilibili.com/x/web-interface/nav', headers=headers) as r:
+            cls._update_wbi_sign((await r.json())['data']['wbi_img'])
 
     @classmethod
     async def _wbi_sign(cls, roomid: int, session: aiohttp.ClientSession, params):
         if cls._WBI_SIGN_CACHE is None or time.monotonic() > cls._WBI_SIGN_CACHE[0] + cls._WBI_CACHE_TIMEOUT:
-            cls._WBI_SIGN_CACHE = (int(time.monotonic()), await cls._fetch_wbi_sign(roomid, session))
+            await cls._fetch_wbi_sign(roomid, session)
         params['wts'] = round(time.time())
+        params['web_location'] = '444.8'
         params = {
             k: ''.join(filter(lambda char: char not in "!'()*", str(v)))
             for k, v in sorted(params.items())
         }
         query = urllib.parse.urlencode(params)
-        params['w_rid'] = hashlib.md5(f'{query}{cls._WBI_SIGN_CACHE[1]}'.encode()).hexdigest()
+        params['w_rid'] = hashlib.md5(f'{query}{cls._WBI_SIGN_CACHE[1]}'.encode()).hexdigest()  # type: ignore
         return params
 
     @classmethod
@@ -205,7 +235,7 @@ class DanmakuClient:
             self._websocket = None
             await websocket.close()
 
-    async def connect_danmaku(self, servers: list[str], token: str, uid=0):
+    async def connect_danmaku(self, servers: list[str], token: str, uid=0, buvid=None):
         try:
             start = time.time()
             self._token = token
@@ -216,7 +246,7 @@ class DanmakuClient:
                                                     receive_timeout=self._HEARTBEAT_INTERVAL + 5) as ws:
                     self._websocket = ws
                     self._logger.info(f'[{self.roomid}] 以uid={uid}身份连接弹幕服务器 {server}')
-                    await ws.send_bytes(self._create_handshake(token, uid))
+                    await ws.send_bytes(self._create_handshake(token, uid, buvid))
                     asyncio.ensure_future(self._heartbeat(ws))
 
                     async for msg in ws:
@@ -227,6 +257,8 @@ class DanmakuClient:
                             raise
                         except Exception:
                             self._logger.exception(f'[{self.roomid}] 处理弹幕数据包时出错')
+                    self._websocket = None
+                    self.handle({'cmd': '_disconnected'})
                     self._logger.info(f'[{self.roomid}] 用uid={uid}身份的弹幕连接已断开 {server}')
         except (asyncio.CancelledError, KeyboardInterrupt):
             raise
@@ -234,15 +266,18 @@ class DanmakuClient:
             self._logger.exception(f'[{self.roomid}] 弹幕服务器连接出错')
 
     async def fetch_danmaku_handshake(self, cookies: dict[str, str] | http.cookies.SimpleCookie, **kwargs):
-        try:
-            cookie = cookies.get('DedeUserID')
-            uid = int((cookie.value if isinstance(cookie, http.cookies.Morsel) else cookie) or 0)
-        except ValueError:
-            self._logger.warning(f'[{self.roomid}] cookies中的DedeUserID无效，使用uid=0')
-            uid = 0
-        if not uid and len(cookies):
-            self._logger.warning(f'[{self.roomid}] 无有效的DedeUserID，使用空cookies')
-            cookies = {}
+        if not (uid := await self.lookup_uid_by_cookie(self.roomid, self._session, cookies)):
+            has_shown_warning = False
+            for key in ['SESSDATA', 'bili_jct', 'DedeUserID', 'DedeUserID__ckMd5', 'sid']:
+                if cookies.pop(key, None) is not None and not has_shown_warning:
+                    self._logger.warning(f'[{self.roomid}] 无有效的cookies登录信息')
+                    has_shown_warning = True
+
+        if not cookies.get('buvid3'):
+            buvid = f'{uuid.uuid4()}'.upper() + 'infoc'
+            cookies['buvid3'] = buvid
+        else:
+            buvid = cookies['buvid3'].value if isinstance(cookies, http.cookies.SimpleCookie) else cookies['buvid3']
 
         params = await self._wbi_sign(self.roomid, self._session, {'id': self.roomid, 'type': 0})
         async with self._session.get(self._API_AUTH_URL, params=params,
@@ -254,13 +289,17 @@ class DanmakuClient:
                 raise ValueError(f'Failed to get handshake info {r.status}: {rsp}')
             token = str(rsp['data']['token'])
             servers = [f"wss://{server['host']}:{server['wss_port']}/sub" for server in rsp['data']['host_list']]
-            return servers, token, uid
+            return servers, token, uid, buvid
 
-    def _create_handshake(self, token: str, uid: int):
+    def _create_handshake(self, token: str, uid: int, buvid: str | None):
         payload = json.dumps({
             'uid': uid,
             'roomid': self.roomid,
             'protover': 3,
+            'buvid': buvid or f'{str(uuid.uuid4()).upper()}infoc',
+            'support_ack': True,
+            'queue_uuid': ''.join(random.choices(string.ascii_lowercase + string.digits, k=8)),
+            'scene': 'room',
             'platform': 'web',
             'type': 2,
             'key': token,
@@ -336,15 +375,18 @@ class DanmakuRooms:
         return await self._token_getter(room.roomid)
 
     async def _run_room(self, room: DanmakuClient):
+        backoff = 0
         while not room.closed:
             try:
-                servers, token, uid = await self._get_token(room)
-                await room.connect_danmaku(servers, token, uid)
+                servers, token, uid, buvid = await self._get_token(room)
+                backoff = 0
+                await room.connect_danmaku(servers, token, uid, buvid)
             except (asyncio.CancelledError, KeyboardInterrupt):
                 raise
             except Exception:
+                backoff = min(7, backoff + 1)
                 self._logger.warning(f'连接直播间{room.roomid}时出错', exc_info=True)
-            await asyncio.sleep(3)
+            await asyncio.sleep(3 * (1.5 ** backoff))
 
     def _check_runners(self):
         for key, task in list(self._runners.items()):
@@ -386,6 +428,6 @@ if typing.TYPE_CHECKING:
     Cookies_Callback = typing.Callable[[], typing.Coroutine[
         typing.Any, typing.Any, typing.Union[typing.Dict[str, str], http.cookies.SimpleCookie, None]]]
     Token_Callback = typing.Callable[[int], typing.Coroutine[typing.Any, typing.Any,
-                                                             typing.Tuple[typing.List[str], str, int]]]
+                                                             typing.Tuple[typing.List[str], str, int, str]]]
     Packet_Callback = typing.Callable[[typing.Any], typing.Any]
     Msg_Packet = typing.Tuple[int, float, typing.Any]

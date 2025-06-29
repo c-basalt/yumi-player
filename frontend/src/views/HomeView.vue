@@ -12,6 +12,7 @@ import ManualRequestModal from '@/components/ManualRequestModal.vue'
 
 import { setRoomid } from '@/api/roomid'
 import { logger } from '@/api/logging'
+import { resetRoomConnection } from '@/api/room_connection'
 
 import { isMobile } from '@/utils/breakpoint'
 import { useCookieStatus } from '@/composables/cookieStatus'
@@ -132,6 +133,7 @@ const handleConfirm = async () => {
                                 <span v-else>
                                     {{ roomInfo.roomid }}
                                     {{ roomInfo.short_id !== roomInfo.roomid ? `(${roomInfo.short_id})` : '' }}
+                                    <span v-if="playerControlRef?.room_connected === false">（连接断开）</span>
                                 </span>
                             </n-text>
                         </n-card>
@@ -149,6 +151,7 @@ const handleConfirm = async () => {
                 </n-grid>
 
                 <n-space class="actions" justify="center" :style="{ marginTop: '20px' }">
+                    <n-button :disabled="!(roomInfo?.roomid)" @click="resetRoomConnection">重连弹幕</n-button>
                     <n-button :type="!roomInfo?.roomid ? 'primary' : undefined" @click="showRoomidModal = true"
                         :loading="loading">
                         设置房间

@@ -22,9 +22,6 @@ rookie_browsers = [
     'safari',
     'chromium',
     'brave',
-    'opera',
-    'vivaldi',
-    'arc',
 ]
 browsers: dict[str, Browser] = {name: getattr(rookiepy, name) for name in rookie_browsers if hasattr(rookiepy, name)}
 if os.environ.get('COOKIE_CLOUD_URL'):

@@ -103,6 +103,7 @@ class Player:
         self._server = server
         self._logger = logging.getLogger('player')
         self._app = aiohttp.web.Application()
+        self._danmaku_disconnected = not self._server.room_connected
 
         self._config = PlayerConfig.create_sub(server.config, 'player')
         self._banned_config = PlayerBannedConfig.create_sub(server.config, 'player_banned')
@@ -165,6 +166,7 @@ class Player:
     @property
     def status(self):
         return {
+            'room_connected': self._server.room_connected,
             'cached_songs': [dataclasses.asdict(song) for song in self._fallback.cached_song_list],
             'config': self._config.as_dict(recursive=False, exclude_keys=['cache_proxy', 'cache_basedir', 'cache_limit_mb']),
             'recent_bvid': self._recent_bvid.as_list(),
@@ -251,6 +253,13 @@ class Player:
     def handle(self, msg):
         """handler of danmaku server messages"""
         try:
+            if msg.get('cmd') == '_disconnected':
+                self._danmaku_disconnected = True
+                self.dispatch_status()
+            elif self._danmaku_disconnected:
+                self._danmaku_disconnected = False
+                self.dispatch_status()
+
             if msg.get('cmd') == 'DANMU_MSG':
                 self._handle_danmu_msg(msg['info'])
             elif msg.get('cmd') == 'SUPER_CHAT_MESSAGE':

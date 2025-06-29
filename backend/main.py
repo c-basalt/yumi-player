@@ -65,6 +65,7 @@ class Server:
             _add_route('/pid', self.pid_handler)
             _add_route('/baseurl', self.baseurl_handler)
             _add_route('/version', self.version_handler)
+            _add_route('/room_connection', self.room_status_handler)
 
             self._plugins: list[Plugin] = [Player(self)]
 
@@ -92,6 +93,14 @@ class Server:
         asyncio.ensure_future(self._merger.close())
         self._merger = Merger()
         if self.roomid:
+            await self._local_danmaku.update_rooms([self.roomid])
+            self._merger.add_iter(self._local_danmaku.rooms[self.roomid].iter_msg())
+
+    async def reset_room_connection(self):
+        if self.roomid:
+            asyncio.ensure_future(self._merger.close())
+            self._merger = Merger()
+            await self._local_danmaku.update_rooms([])
             await self._local_danmaku.update_rooms([self.roomid])
             self._merger.add_iter(self._local_danmaku.rooms[self.roomid].iter_msg())
 
@@ -129,6 +138,12 @@ class Server:
     @roomid.setter
     def roomid(self, value: int):
         self.config.roomid = int(value)
+
+    @property
+    def room_connected(self):
+        if room := self._local_danmaku.rooms.get(self.roomid):
+            return room.ws_connected
+        return False
 
     @property
     def room_uid(self):
@@ -202,6 +217,11 @@ class Server:
 
     async def version_handler(self, request: aiohttp.web.Request):
         return aiohttp.web.json_response({'version': get_version()})
+
+    async def room_status_handler(self, request: aiohttp.web.Request):
+        if request.method == 'POST':
+            await self.reset_room_connection()
+        return aiohttp.web.json_response({'connected': self.room_connected})
 
 
 allowed_hosts: set[str] = set()
